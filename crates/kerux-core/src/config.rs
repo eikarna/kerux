@@ -598,6 +598,10 @@ impl Default for SkillsSettings {
     }
 }
 
+fn default_webui_addr() -> String {
+    "127.0.0.1:8787".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GatewaySettings {
@@ -616,6 +620,10 @@ pub struct GatewaySettings {
     pub whatsapp_bridge_url: Option<String>,
     pub webhooks_enabled: bool,
     pub webhooks_addr: Option<String>,
+    pub webui_enabled: bool,
+    #[serde(default = "default_webui_addr")]
+    pub webui_addr: String,
+    pub webui_password: String,
     pub admins: Vec<String>,
     /// Stream model output live into the chat (message edited as tokens
     /// arrive) instead of showing a heartbeat until the full reply is ready.
@@ -651,6 +659,9 @@ impl Default for GatewaySettings {
             whatsapp_bridge_url: None,
             webhooks_enabled: false,
             webhooks_addr: None,
+            webui_enabled: false,
+            webui_addr: default_webui_addr(),
+            webui_password: String::new(),
             admins: Vec::new(),
             streaming_replies: false,
             tool_approval: true,
@@ -920,6 +931,17 @@ impl AppConfig {
         )?;
         apply_string_value_override("KERUX_LOG_LEVEL", &mut self.logging.level);
         apply_path_override("KERUX_SKILLS_DIR", &mut self.skills.root_dir)?;
+        apply_bool_override("KERUX_WEBUI_ENABLED", &mut self.gateway.webui_enabled)?;
+        apply_string_value_override("KERUX_WEBUI_ADDR", &mut self.gateway.webui_addr);
+        if let Ok(val) = std::env::var("KERUX_WEBUI_PASSWORD") {
+            if !val.trim().is_empty() {
+                self.gateway.webui_password = val;
+            }
+        } else if let Ok(val) = std::env::var("HERMES_WEBUI_PASSWORD") {
+            if !val.trim().is_empty() {
+                self.gateway.webui_password = val;
+            }
+        }
         Ok(())
     }
 }

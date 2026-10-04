@@ -39,6 +39,12 @@ pub struct GatewayConfig {
     pub webhooks_enabled: bool,
     /// Webhook listen address
     pub webhooks_addr: Option<String>,
+    /// Enable Hermes WebUI / Hermex HTTP API listener
+    pub webui_enabled: bool,
+    /// WebUI listen address (e.g. "127.0.0.1:8787")
+    pub webui_addr: String,
+    /// Optional password for WebUI access (required if non-loopback)
+    pub webui_password: String,
     /// Default admin users (user IDs that can access admin commands)
     pub admins: Vec<String>,
     /// Stream model output live into the chat (edit message as tokens arrive)
@@ -68,6 +74,9 @@ impl Default for GatewayConfig {
             whatsapp_bridge_url: settings.whatsapp_bridge_url,
             webhooks_enabled: settings.webhooks_enabled,
             webhooks_addr: settings.webhooks_addr,
+            webui_enabled: settings.webui_enabled,
+            webui_addr: settings.webui_addr,
+            webui_password: settings.webui_password,
             admins: settings.admins,
             streaming_replies: settings.streaming_replies,
             tool_approval: settings.tool_approval,
@@ -680,11 +689,34 @@ impl Gateway {
             .map(|(name, a)| (name.clone(), a.clone()))
             .collect();
 
-        if enabled.is_empty() && !self.config.webhooks_enabled {
+        if enabled.is_empty() && !self.config.webhooks_enabled && !self.config.webui_enabled {
             return Err(crate::error::Error::Agent(
-                "No enabled platform adapters or webhook listener to run".to_string(),
+                "No enabled platform adapters, webhook listener, or WebUI server to run"
+                    .to_string(),
             ));
         }
+
+        let webui_listener = if self.config.webui_enabled {
+            let addr_str = &self.config.webui_addr;
+            let socket_addr: std::net::SocketAddr = addr_str.parse().map_err(|e| {
+                crate::error::Error::Config(format!("Invalid webui_addr '{addr_str}': {e}"))
+            })?;
+            if !socket_addr.ip().is_loopback() && self.config.webui_password.trim().is_empty() {
+                return Err(crate::error::Error::Config(
+                    "WebUI remote non-loopback binding requires a non-empty password".to_string(),
+                ));
+            }
+            let listener = tokio::net::TcpListener::bind(socket_addr)
+                .await
+                .map_err(|e| {
+                    crate::error::Error::Agent(format!(
+                        "Failed to bind WebUI listener at {socket_addr}: {e}"
+                    ))
+                })?;
+            Some((listener, socket_addr))
+        } else {
+            None
+        };
 
         let webhook_listener = if self.config.webhooks_enabled {
             let address = self.config.webhooks_addr.as_deref().ok_or_else(|| {
@@ -718,6 +750,28 @@ impl Gateway {
         // slowest adapter starve the rest. Each task owns its own loop and
         // dispatches into the shared gateway.
         let mut handles = Vec::new();
+
+        if let Some((listener, address)) = webui_listener {
+            let webui_state = crate::webui::WebUiState::new(
+                Arc::new(tokio::sync::RwLock::new(runtime_config())),
+                self.config.webui_password.clone(),
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            );
+            let running = self.running.clone();
+            handles.push(tokio::spawn(async move {
+                info!(%address, "WebUI server listening at http://{address}");
+                let shutdown = async move {
+                    while *running.read().await {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                };
+                if let Err(e) =
+                    crate::webui::serve_webui_listener(listener, webui_state, shutdown).await
+                {
+                    error!("WebUI server stopped with error: {e}");
+                }
+            }));
+        }
 
         if let Some(listener) = webhook_listener {
             let address = listener.local_addr().map_err(|error| {

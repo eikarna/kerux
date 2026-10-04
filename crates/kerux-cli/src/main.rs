@@ -1,5 +1,7 @@
 //! Kerux CLI
 
+#![allow(clippy::double_must_use)]
+
 mod autonomous;
 mod runs;
 mod screenshot;

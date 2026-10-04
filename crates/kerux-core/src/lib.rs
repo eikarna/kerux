@@ -39,6 +39,8 @@
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 
+#![allow(clippy::double_must_use)]
+
 use std::sync::{Mutex, MutexGuard};
 
 /// Locks a synchronous mutex and recovers its guarded data after poisoning.
@@ -89,6 +91,7 @@ pub mod tools;
 pub mod trajectory;
 pub mod validation;
 pub mod validators;
+pub mod webui;
 
 pub use agent::{AgentConfig, AgentEvent, AgentTelemetry, KeruxAgent};
 pub use auth::{

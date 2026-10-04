@@ -14,6 +14,7 @@ categories = ["ai", "asynchronous", "network-programming"]
 # Async runtime
 tokio = { workspace = true }
 async-trait = { workspace = true }
+async-stream = "0.3"
 futures = { workspace = true }
 futures-util = { workspace = true }
 pin-project = { workspace = true }

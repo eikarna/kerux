@@ -215,6 +215,9 @@ slack_enabled = false
 slack_api_base = "https://slack.com/api"
 webhooks_enabled = false
 # webhooks_addr = "127.0.0.1:8080"
+webui_enabled = false
+# webui_addr = "127.0.0.1:8787"
+# webui_password = ""
 admins = []
 
 [tools]
