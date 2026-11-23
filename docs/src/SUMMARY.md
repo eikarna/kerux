@@ -25,6 +25,7 @@
 - [Cron Scheduler](features/cron-scheduler.md)
 - [Subagent Delegation](features/subagent-delegation.md)
 - [Taste/Style Profile Learning](features/taste-profile.md)
+- [Model Context Protocol (MCP)](features/mcp.md)
 
 # Development
 

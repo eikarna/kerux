@@ -162,15 +162,17 @@ mask_secrets = true        # mask credentials (API keys, bearer tokens) on store
 quarantine_low_trust = true # quarantine memories below trust_threshold with tag
 
 [mcp]
-autoload = true
+autoload = true # auto-discover from ~/.kerux/mcp.json and Claude Desktop config
 
+# Remote HTTP / SSE server
 [[mcp.servers]]
-name = "filesystem-demo"
-transport = "http"
+name = "remote-demo"
+transport = "http" # or "sse"
 url = "http://127.0.0.1:8080/mcp"
 # auth_token = "optional"
 enabled = false
 
+# Local subprocess stdio server
 [[mcp.servers]]
 name = "stdio-demo"
 transport = "stdio"
