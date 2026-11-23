@@ -1,5 +1,7 @@
 //! # Kerux Core Library
 //!
+#![allow(clippy::double_must_use)]
+//!
 //! A high-performance Rust implementation of the Kerux-Agent orchestration loop.
 //! Supports asynchronous tool execution, streaming-first architecture, and
 //! dynamic JSON-schema generation.

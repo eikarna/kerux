@@ -36,6 +36,85 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState) {
             modal.form().selected,
         );
     }
+
+    if matches!(state.ui.input_mode, InputMode::Prompt) {
+        set_active_input_cursor(frame, state, area);
+    }
+}
+
+fn set_active_input_cursor(frame: &mut Frame<'_>, state: &AppState, area: Rect) {
+    if state.ui.modal.is_some() {
+        return;
+    }
+
+    match state.ui.view {
+        crate::tui::state::ViewMode::Landing => {
+            if is_constrained(area) {
+                let layout = build_landing_constrained_layout(area);
+                let text_w = UnicodeWidthStr::width(state.ui.prompt_input.as_str()) as u16;
+                let cx = layout
+                    .prompt
+                    .x
+                    .saturating_add(1)
+                    .saturating_add(text_w)
+                    .min(layout.prompt.right().saturating_sub(2));
+                let cy = layout.prompt.y.saturating_add(1);
+                frame.set_cursor_position((cx, cy));
+            } else if area.width < 100 {
+                let is_portrait_like = area.width < 56;
+                let layout = build_landing_compact_layout(area, is_portrait_like);
+                let text_w = UnicodeWidthStr::width(state.ui.prompt_input.as_str()) as u16;
+                let cx = layout
+                    .prompt
+                    .x
+                    .saturating_add(text_w)
+                    .min(layout.prompt.right().saturating_sub(1));
+                let cy = layout.prompt.y;
+                frame.set_cursor_position((cx, cy));
+            } else {
+                let prompt_area = centered_rect_percent(area, 52, 40, 100, 8);
+                let text_w = UnicodeWidthStr::width(state.ui.prompt_input.as_str()) as u16;
+                let cx = prompt_area
+                    .x
+                    .saturating_add(1)
+                    .saturating_add(text_w)
+                    .min(prompt_area.right().saturating_sub(2));
+                let cy = prompt_area.y.saturating_add(1);
+                frame.set_cursor_position((cx, cy));
+            }
+        }
+        crate::tui::state::ViewMode::Workspace => {
+            if is_constrained(area) {
+                let layout = build_constrained_layout(area);
+                let status = status_summary(state);
+                let prompt_width = area.width.saturating_sub(status.len() as u16 + 12) as usize;
+                let displayed = sliding_prompt_display(&state.ui.prompt_input, prompt_width);
+                let disp_w = UnicodeWidthStr::width(displayed.as_str()) as u16;
+                // Format: "PROMPT " (7 chars) + prompt
+                let cx = layout
+                    .footer
+                    .x
+                    .saturating_add(7)
+                    .saturating_add(disp_w)
+                    .min(layout.footer.right().saturating_sub(1));
+                let cy = layout.footer.y;
+                frame.set_cursor_position((cx, cy));
+            } else {
+                let footer_y = area.bottom().saturating_sub(3); // footer block has border
+                let displayed = sliding_prompt_display(&state.ui.prompt_input, 180);
+                let disp_w = UnicodeWidthStr::width(displayed.as_str()) as u16;
+                // Format: Border (1) + "PROMPT " (7) + displayed
+                let cx = area
+                    .x
+                    .saturating_add(1)
+                    .saturating_add(7)
+                    .saturating_add(disp_w)
+                    .min(area.right().saturating_sub(2));
+                let cy = footer_y.saturating_add(1);
+                frame.set_cursor_position((cx, cy));
+            }
+        }
+    }
 }
 
 fn render_landing(frame: &mut Frame<'_>, state: &AppState, area: Rect) {
@@ -821,7 +900,7 @@ fn footer_widget(state: &AppState) -> Paragraph<'_> {
     let prompt = if state.ui.prompt_input.is_empty() {
         state.persistent.config.tui.prompt_placeholder.clone()
     } else {
-        state.ui.prompt_input.clone()
+        sliding_prompt_display(&state.ui.prompt_input, 180)
     };
     let mut footer_line = vec![Span::styled(
         state.ui.footer_help.clone(),
@@ -861,7 +940,7 @@ fn footer_widget(state: &AppState) -> Paragraph<'_> {
             ),
             Span::raw(" "),
             Span::styled(
-                truncate_display(&prompt, 180),
+                prompt,
                 Style::default().fg(if state.ui.prompt_input.is_empty() {
                     MUTED
                 } else {
@@ -876,13 +955,16 @@ fn footer_widget(state: &AppState) -> Paragraph<'_> {
 }
 
 fn constrained_footer_widget(state: &AppState, width: u16) -> Paragraph<'_> {
-    let prompt = if state.ui.prompt_input.is_empty() {
-        state.persistent.config.tui.prompt_placeholder.clone()
-    } else {
-        state.ui.prompt_input.clone()
-    };
     let status = status_summary(state);
     let prompt_width = width.saturating_sub(status.len() as u16 + 12) as usize;
+    let prompt = if state.ui.prompt_input.is_empty() {
+        truncate_display(
+            &state.persistent.config.tui.prompt_placeholder,
+            prompt_width,
+        )
+    } else {
+        sliding_prompt_display(&state.ui.prompt_input, prompt_width)
+    };
 
     Paragraph::new(Text::from(vec![Line::from(vec![
         Span::styled(
@@ -894,7 +976,7 @@ fn constrained_footer_widget(state: &AppState, width: u16) -> Paragraph<'_> {
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            truncate_display(&prompt, prompt_width),
+            prompt,
             Style::default().fg(if state.ui.prompt_input.is_empty() {
                 MUTED
             } else {
@@ -1843,6 +1925,33 @@ fn truncate_text(text: &str, max: usize) -> String {
     truncate_display(text, max)
 }
 
+pub(crate) fn sliding_prompt_display(text: &str, max_width: usize) -> String {
+    let total_width = UnicodeWidthStr::width(text);
+    if total_width <= max_width {
+        return text.to_string();
+    }
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+
+    let target_width = max_width.saturating_sub(3); // leave room for "..." prefix
+    let mut current_width = 0;
+    let mut rev_chars = Vec::new();
+
+    for ch in text.chars().rev() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if current_width + ch_width > target_width {
+            break;
+        }
+        current_width += ch_width;
+        rev_chars.push(ch);
+    }
+
+    rev_chars.reverse();
+    let tail: String = rev_chars.into_iter().collect();
+    format!("...{tail}")
+}
+
 fn truncate_display(text: &str, max_width: usize) -> String {
     if UnicodeWidthStr::width(text) <= max_width {
         return text.to_string();
@@ -2198,6 +2307,16 @@ mod tests {
         let mut entry = TranscriptEntry::new(role, content);
         entry.timestamp = Some(timestamp.to_string());
         entry
+    }
+
+    #[test]
+    fn test_sliding_prompt_display() {
+        assert_eq!(sliding_prompt_display("short text", 20), "short text");
+        assert_eq!(
+            sliding_prompt_display("abcdefghijklmnopqrstuvwxyz", 10),
+            "...tuvwxyz"
+        );
+        assert_eq!(sliding_prompt_display("hello world", 3), "...");
     }
 
     #[test]

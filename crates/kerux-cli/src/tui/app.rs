@@ -271,6 +271,9 @@ impl TuiApp {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) {
+        if handle_mouse_click_to_prompt(&mut self.state, mouse) {
+            return;
+        }
         handle_mouse_scroll(&mut self.state, mouse);
     }
 
@@ -1104,6 +1107,24 @@ fn rollback_terminal_setup() {
 }
 
 const MOUSE_SCROLL_LINES: u16 = 3;
+
+fn handle_mouse_click_to_prompt(state: &mut AppState, mouse: MouseEvent) -> bool {
+    if state.ui.modal.is_some() {
+        return false;
+    }
+
+    if matches!(
+        mouse.kind,
+        MouseEventKind::Down(crossterm::event::MouseButton::Left)
+    ) {
+        // Any tap in the bottom rows / input footer or landing prompt triggers Prompt mode
+        state.reduce(Action::SetInputMode(InputMode::Prompt));
+        state.clear_footer_notice();
+        return true;
+    }
+
+    false
+}
 
 fn handle_mouse_scroll(state: &mut AppState, mouse: MouseEvent) -> bool {
     if state.ui.modal.is_some() {

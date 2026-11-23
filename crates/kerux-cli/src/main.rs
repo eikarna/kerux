@@ -1,10 +1,13 @@
 //! Kerux CLI
+//
+#![allow(clippy::double_must_use)]
 
 mod autonomous;
 mod runs;
 mod screenshot;
 mod session;
 mod tui;
+mod tui_wizard;
 mod wizard;
 
 use std::collections::HashMap;

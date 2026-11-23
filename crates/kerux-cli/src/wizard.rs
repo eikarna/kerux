@@ -286,6 +286,9 @@ pub struct WizardPlan {
     pub api_key: Option<String>,
     pub model: String,
     pub fallback: Option<FallbackChoice>,
+    pub toolset_preset: Option<String>,
+    pub web_search_url: Option<String>,
+    pub budget_daily_limit: Option<f64>,
 }
 
 /// One `[[client.fallback]]` entry picked in the wizard.
@@ -339,6 +342,36 @@ pub fn write_wizard_config(path: &Path, plan: &WizardPlan, replace_fallback: boo
 
     let agent = ensure_table(&mut doc, "agent")?;
     agent["model"] = value(&plan.model);
+
+    if let Some(preset) = &plan.toolset_preset {
+        let tools = ensure_table(&mut doc, "tools")?;
+        match preset.as_str() {
+            "safe" => {
+                let term = ensure_subtable(tools, "terminal")?;
+                term["max_timeout_secs"] = value(0);
+                let code = ensure_subtable(tools, "code_execution")?;
+                code["default_timeout_secs"] = value(0);
+                code["max_timeout_secs"] = value(0);
+            }
+            "coding" => {
+                let term = ensure_subtable(tools, "terminal")?;
+                term["max_timeout_secs"] = value(300);
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(search_url) = &plan.web_search_url {
+        let tools = ensure_table(&mut doc, "tools")?;
+        let web = ensure_subtable(tools, "web")?;
+        web["search_url"] = value(search_url);
+    }
+
+    if let Some(daily) = plan.budget_daily_limit {
+        let budget = ensure_table(&mut doc, "budget")?;
+        budget["enabled"] = value(true);
+        budget["daily_limit"] = value(daily);
+    }
 
     atomic_write(path, &doc.to_string())
 }
@@ -417,7 +450,7 @@ pub fn write_model_to_config(path: &Path, model: &str) -> Result<()> {
 // Discovery helpers
 // ---------------------------------------------------------------------------
 
-fn build_plan_provider(
+pub fn build_plan_provider(
     kind: ProviderKind,
     base_url: &str,
     api_key: Option<String>,
@@ -583,14 +616,6 @@ pub async fn run_wizard() -> Result<bool> {
         bail!("The wizard needs an interactive terminal. Copy kerux.example.toml to kerux.toml and edit it manually.");
     }
 
-    println!("{}", style("Kerux setup wizard").bold().cyan());
-    println!(
-        "{}",
-        style("Provider, model, fallback, smoke test — no docs required. Esc backs out of a step.")
-            .dim()
-    );
-    println!();
-
     let target = wizard_config_path();
     if target.exists() {
         let again = Confirm::new()
@@ -607,6 +632,20 @@ pub async fn run_wizard() -> Result<bool> {
         }
     }
 
+    let mut wizard = crate::tui_wizard::FullscreenWizard::enter()?;
+    let res = wizard.run().await;
+    let _ = wizard.exit();
+    res
+}
+
+/// Fallback legacy CLI-based wizard if TUI is not requested.
+#[allow(dead_code)]
+pub async fn run_wizard_cli() -> Result<bool> {
+    if !std::io::stdin().is_terminal() {
+        bail!("The wizard needs an interactive terminal. Copy kerux.example.toml to kerux.toml and edit it manually.");
+    }
+
+    let target = wizard_config_path();
     let mut state = WizardState::default();
     let mut step = Step::Provider;
 
@@ -1103,6 +1142,9 @@ async fn write_step(state: &mut WizardState, target: &Path) -> Result<Move> {
         },
         model: state.model.clone().unwrap_or_default(),
         fallback: state.fallback.clone(),
+        toolset_preset: None,
+        web_search_url: None,
+        budget_daily_limit: None,
     };
     write_wizard_config(target, &plan, replace_fallback)?;
     println!(
@@ -1337,6 +1379,33 @@ mod tests {
     }
 
     #[test]
+    fn writes_tools_and_budget_guardrails_to_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let plan = WizardPlan {
+            provider: ProviderKind::Openai,
+            base_url: "https://api.openai.com/v1".into(),
+            api_key: Some("sk-test".into()),
+            model: "gpt-4o".into(),
+            fallback: None,
+            toolset_preset: Some("full".into()),
+            web_search_url: Some("https://lite.duckduckgo.com/lite/?q={query}".into()),
+            budget_daily_limit: Some(15.0),
+        };
+        write_wizard_config(&path, &plan, false).unwrap();
+
+        let parsed = parse_config_file(&path).unwrap();
+        assert_eq!(parsed.client.provider, "openai");
+        assert_eq!(parsed.agent.model, "gpt-4o");
+        assert!(parsed.budget.enabled);
+        assert_eq!(parsed.budget.daily_limit, 15.0);
+        assert_eq!(
+            parsed.tools.web.search_url,
+            "https://lite.duckduckgo.com/lite/?q={query}"
+        );
+    }
+
+    #[test]
     fn writes_fresh_config_that_roundtrips_through_parser() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -1346,6 +1415,9 @@ mod tests {
             api_key: Some("sk-ant-test".into()),
             model: "claude-sonnet-4-20250514".into(),
             fallback: None,
+            toolset_preset: None,
+            web_search_url: None,
+            budget_daily_limit: None,
         };
         write_wizard_config(&path, &plan, false).unwrap();
 
@@ -1373,6 +1445,9 @@ mod tests {
             api_key: Some("sk-custom".into()),
             model: "my-model".into(),
             fallback: None,
+            toolset_preset: None,
+            web_search_url: None,
+            budget_daily_limit: None,
         };
         write_wizard_config(&path, &plan, false).unwrap();
 
@@ -1393,6 +1468,9 @@ mod tests {
             api_key: None, // key stays in the environment
             model: "claude-sonnet-4-20250514".into(),
             fallback: None,
+            toolset_preset: None,
+            web_search_url: None,
+            budget_daily_limit: None,
         };
         write_wizard_config(&path, &plan, false).unwrap();
 
@@ -1420,6 +1498,9 @@ mod tests {
                 api_key: Some("sk-or".into()),
                 model: "openai/gpt-4o-mini".into(),
             }),
+            toolset_preset: None,
+            web_search_url: None,
+            budget_daily_limit: None,
         };
         write_wizard_config(&path, &plan, false).unwrap();
 
@@ -1447,6 +1528,9 @@ mod tests {
                 api_key: None,
                 model: "llama3.1".into(),
             }),
+            toolset_preset: None,
+            web_search_url: None,
+            budget_daily_limit: None,
         };
         write_wizard_config(&path, &plan, false).unwrap();
 
