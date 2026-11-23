@@ -124,6 +124,12 @@ enum Commands {
     Serve {
         #[arg(short, long)]
         system: Option<String>,
+        /// Enable WebUI / Hermex iOS REST & SSE API listener
+        #[arg(long)]
+        webui: bool,
+        /// Port for the WebUI / Hermex API listener (e.g. 8787)
+        #[arg(long)]
+        webui_port: Option<u16>,
     },
     Test {
         #[arg()]
@@ -1635,29 +1641,50 @@ impl kerux_core::gateway::MessageHandler for AgentMessageHandler {
 }
 
 /// Run the multi-platform gateway, routing incoming messages to the agent.
-async fn run_gateway(config: &AppConfig, system_prompt: Option<&str>) -> Result<()> {
+async fn run_gateway(
+    config: &AppConfig,
+    system_prompt: Option<&str>,
+    webui_enabled_cli: bool,
+    webui_port_cli: Option<u16>,
+) -> Result<()> {
     let mut mcp_manager = McpManager::new();
     let agent = create_agent_without_events(config, system_prompt, &mut mcp_manager).await?;
-    let gateway_config = kerux_core::gateway::GatewayConfig::default();
+    let mut gateway_config = kerux_core::gateway::GatewayConfig::default();
+    if webui_enabled_cli {
+        gateway_config.webui_enabled = true;
+    }
+    if let Some(port) = webui_port_cli {
+        gateway_config.webui_enabled = true;
+        gateway_config.webui_addr = Some(format!("127.0.0.1:{port}"));
+    }
     let scheduler = Arc::new(kerux_core::scheduler::Scheduler::new(
         kerux_core::scheduler::Scheduler::default_path(),
     ));
+    let session_store = kerux_core::session_store::SessionStore::new(
+        kerux_core::session_store::SessionStore::default_dir(),
+    );
+    let agent_arc = Arc::new(agent);
     let handler = Arc::new(AgentMessageHandler {
-        agent: Arc::new(agent),
+        agent: agent_arc.clone(),
         streaming_replies: gateway_config.streaming_replies,
         tool_approval: gateway_config.tool_approval,
         tool_approval_timeout_secs: gateway_config.tool_approval_timeout_secs,
         context_compaction: gateway_config.context_compaction,
         scheduler: scheduler.clone(),
-        session_store: kerux_core::session_store::SessionStore::new(
-            kerux_core::session_store::SessionStore::default_dir(),
-        ),
+        session_store: session_store.clone(),
         current_channel: tokio::sync::Mutex::new(None),
         run_lock: tokio::sync::Mutex::new(()),
     });
+    let direct_runner = Arc::new(kerux_core::webui::DirectAgentRunner::new(
+        agent_arc,
+        session_store.clone(),
+        config.agent.model.clone(),
+    ));
     let mut gateway = kerux_core::gateway::Gateway::new(gateway_config.clone())
         .with_handler(handler)
-        .with_scheduler(scheduler);
+        .with_scheduler(scheduler)
+        .with_session_store(session_store)
+        .with_webui_runner(direct_runner);
 
     if gateway_config.telegram_enabled {
         let mut telegram =
@@ -2287,8 +2314,12 @@ async fn main() -> Result<()> {
                 chat_non_tui(&loaded.config, system.as_deref(), session.as_deref()).await?;
             }
         }
-        Commands::Serve { system } => {
-            run_gateway(&loaded.config, system.as_deref()).await?;
+        Commands::Serve {
+            system,
+            webui,
+            webui_port,
+        } => {
+            run_gateway(&loaded.config, system.as_deref(), *webui, *webui_port).await?;
         }
         Commands::Tools { verbose } => {
             list_tools(&loaded.config, *verbose).await?;

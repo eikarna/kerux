@@ -91,6 +91,7 @@ pub mod tools;
 pub mod trajectory;
 pub mod validation;
 pub mod validators;
+pub mod webui;
 
 pub use agent::{AgentConfig, AgentEvent, AgentTelemetry, KeruxAgent};
 pub use auth::{
@@ -148,3 +149,7 @@ pub use tools::{
     register_builtin_tools_with_sub_agent, KeruxTool, ToolRegistry, ToolResult,
 };
 pub use trajectory::{Trajectory, TrajectoryBuilder, TrajectoryExporter};
+pub use webui::{
+    create_webui_router, serve_webui_listener, DirectAgentRunner, WebUiActiveStream,
+    WebUiAgentRunner, WebUiServerState, WebUiSseEvent,
+};

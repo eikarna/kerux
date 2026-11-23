@@ -21,7 +21,7 @@ async-trait = "0.1"
 
 # Networking
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
-axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "json"] }
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "json", "query"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

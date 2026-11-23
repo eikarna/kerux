@@ -632,6 +632,12 @@ pub struct GatewaySettings {
     /// Roll the oldest messages into a summary when a session grows past the
     /// compaction threshold, instead of silently dropping them at the cap.
     pub context_compaction: bool,
+    /// Enable WebUI / Hermex iOS REST & SSE API listener.
+    pub webui_enabled: bool,
+    /// WebUI listen address (e.g. "127.0.0.1:8787").
+    pub webui_addr: Option<String>,
+    /// Optional password gate for WebUI / Hermex clients.
+    pub webui_password: Option<String>,
 }
 
 impl Default for GatewaySettings {
@@ -657,6 +663,9 @@ impl Default for GatewaySettings {
             tool_approval_timeout_secs: 300,
             stt_model: None,
             context_compaction: true,
+            webui_enabled: false,
+            webui_addr: None,
+            webui_password: None,
         }
     }
 }

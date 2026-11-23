@@ -51,6 +51,12 @@ pub struct GatewayConfig {
     pub stt_model: Option<String>,
     /// Roll oldest messages into a summary instead of dropping them at cap.
     pub context_compaction: bool,
+    /// Enable WebUI / Hermex iOS API listener.
+    pub webui_enabled: bool,
+    /// WebUI listen address (e.g. "127.0.0.1:8787").
+    pub webui_addr: Option<String>,
+    /// Optional password for WebUI access.
+    pub webui_password: Option<String>,
 }
 
 impl Default for GatewayConfig {
@@ -74,6 +80,9 @@ impl Default for GatewayConfig {
             tool_approval_timeout_secs: settings.tool_approval_timeout_secs,
             stt_model: settings.stt_model,
             context_compaction: settings.context_compaction,
+            webui_enabled: settings.webui_enabled,
+            webui_addr: settings.webui_addr,
+            webui_password: settings.webui_password,
         }
     }
 }
@@ -547,6 +556,8 @@ pub struct Gateway {
     active_runs: Arc<RwLock<HashMap<String, Arc<ActiveRun>>>>,
     /// Recurring job scheduler (`None` disables the cron ticker).
     scheduler: Option<Arc<crate::scheduler::Scheduler>>,
+    session_store: Option<crate::session_store::SessionStore>,
+    webui_runner: Option<Arc<dyn crate::webui::WebUiAgentRunner>>,
 }
 
 /// Handler for incoming messages from any platform
@@ -583,7 +594,21 @@ impl Gateway {
             running: Arc::new(RwLock::new(false)),
             active_runs: Arc::new(RwLock::new(HashMap::new())),
             scheduler: None,
+            session_store: None,
+            webui_runner: None,
         }
+    }
+
+    /// Attach the session store for conversation history and WebUI sessions.
+    pub fn with_session_store(mut self, session_store: crate::session_store::SessionStore) -> Self {
+        self.session_store = Some(session_store);
+        self
+    }
+
+    /// Attach an agent runner for WebUI and Hermex iOS client interactions.
+    pub fn with_webui_runner(mut self, runner: Arc<dyn crate::webui::WebUiAgentRunner>) -> Self {
+        self.webui_runner = Some(runner);
+        self
     }
 
     /// Register a platform adapter
@@ -680,9 +705,14 @@ impl Gateway {
             .map(|(name, a)| (name.clone(), a.clone()))
             .collect();
 
-        if enabled.is_empty() && !self.config.webhooks_enabled {
+        if enabled.is_empty()
+            && !self.config.webhooks_enabled
+            && !self.config.webui_enabled
+            && self.config.webui_addr.is_none()
+        {
             return Err(crate::error::Error::Agent(
-                "No enabled platform adapters or webhook listener to run".to_string(),
+                "No enabled platform adapters, webhook listener, or WebUI listener to run"
+                    .to_string(),
             ));
         }
 
@@ -698,6 +728,25 @@ impl Gateway {
                     .map_err(|error| {
                         crate::error::Error::Agent(format!(
                             "Failed to bind webhook listener at {address}: {error}"
+                        ))
+                    })?,
+            )
+        } else {
+            None
+        };
+
+        let webui_listener = if self.config.webui_enabled || self.config.webui_addr.is_some() {
+            let address = self
+                .config
+                .webui_addr
+                .as_deref()
+                .unwrap_or("127.0.0.1:8787");
+            Some(
+                tokio::net::TcpListener::bind(address)
+                    .await
+                    .map_err(|error| {
+                        crate::error::Error::Agent(format!(
+                            "Failed to bind WebUI listener at {address}: {error}"
                         ))
                     })?,
             )
@@ -771,6 +820,39 @@ impl Gateway {
                 }
             }));
         }
+
+        if let Some(listener) = webui_listener {
+            let address = listener.local_addr().map_err(|error| {
+                crate::error::Error::Agent(format!(
+                    "Failed to inspect WebUI listener address: {error}"
+                ))
+            })?;
+            let store = self.session_store.clone().unwrap_or_else(|| {
+                crate::session_store::SessionStore::new(
+                    crate::session_store::SessionStore::default_dir(),
+                )
+            });
+            let state = crate::webui::WebUiServerState::new(
+                store,
+                self.config.webui_password.clone(),
+                self.webui_runner.clone(),
+            );
+            let running = self.running.clone();
+            handles.push(tokio::spawn(async move {
+                info!(%address, "WebUI / Hermex API listener started");
+                let shutdown = async move {
+                    while *running.read().await {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                };
+                if let Err(error) =
+                    crate::webui::serve_webui_listener(listener, state, shutdown).await
+                {
+                    error!(%error, "WebUI listener stopped with an error");
+                }
+            }));
+        }
+
         for (platform, adapter) in enabled {
             let running = self.running.clone();
             let message_handler = self.message_handler.clone();
